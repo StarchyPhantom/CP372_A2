@@ -74,6 +74,7 @@ public class Sender {
                     try {
                         DSPacket ack = receivePacket(socket);
                         if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == seq) {
+                            System.out.println("received ACK for seq " + seq);
                             lastAcked = seq;
                             seq = (seq + 1) % 128;
                             break;

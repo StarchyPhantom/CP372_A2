@@ -42,7 +42,7 @@ public class Receiver {
                 switch (pkt.getType()) {
                     case DSPacket.TYPE_SOT:
                         if (pkt.getSeqNum() == 0) {
-                            System.out.println("received SOT");
+                            System.out.println("received SOT seq=" + pkt.getSeqNum());
                             sendAck(socket, pkt.getSeqNum(), incoming.getAddress().getHostAddress(), incoming.getPort());
                             expectedSeq = 1;
                             lastAcked = 0;
@@ -62,7 +62,7 @@ public class Receiver {
                         break;
                     case DSPacket.TYPE_EOT:
                         if (pkt.getSeqNum() == expectedSeq) {
-                            System.out.println("received EOT");
+                            System.out.println("received EOT seq=" + pkt.getSeqNum());
                             sendAck(socket, pkt.getSeqNum(), incoming.getAddress().getHostAddress(), incoming.getPort());
                             socket.close(); // done
                             return;
