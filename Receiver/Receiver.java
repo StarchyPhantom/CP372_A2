@@ -6,32 +6,36 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 
+
 /**
- * UDP Receiver
  *
- * Implements the stop‑and‑wait protocol
- * todo: add go-back-n.
+ * RN is for `ChaosEngine` btw
+ *
  * Usage:
- *   java Receiver <listen-port> <output-file>
+ *   java Receiver <sender_ip> <sender_ack_port> <rcv_data_port> <output_file> <RN>
  */
 public class Receiver {
 
     private static final int BUFFER_SIZE = DSPacket.MAX_PACKET_SIZE;
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) {
-            System.err.println("usage: java Receiver <port> <file>");
+        if (args.length != 5) {
+            System.err.println("usage: java Receiver <sender_ip> <sender_ack_port> <rcv_data_port> <output_file> <RN>");
             System.exit(1);
         }
 
-        int port = Integer.parseInt(args[0]);
-        File outFile = new File(args[1]);
+        String senderIp = args[0];
+        int senderAckPort = Integer.parseInt(args[1]);
+        int rcvDataPort = Integer.parseInt(args[2]);
+        File outFile = new File(args[3]);
+        int rn = Integer.parseInt(args[4]);
 
-        DatagramSocket socket = new DatagramSocket(port);
-        System.out.println("listening on port " + port);
+        DatagramSocket socket = new DatagramSocket(rcvDataPort);
+        System.out.println("listening for data on port " + rcvDataPort);
 
         int expectedSeq = 0; // for SOT we expect 0
         int lastAcked = -1;
+        int ackCount = 0; // count of ACKs we intended to send (1-indexed)
 
         try (FileOutputStream fos = new FileOutputStream(outFile)) {
             byte[] buf = new byte[BUFFER_SIZE];

@@ -7,40 +7,45 @@ import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 
 /**
- * Simple UDP Sender for DS‑FTP.
  *
- * The implementation uses the stop‑and‑wait protocol
- * todo: add go-back-n.
- * 
+ * window size parameter is ignored for now, use it for go-back-N later lol
+ *
  * Command line:
- *   java Sender <receiver-host> <receiver-port> <file-to-send>
+ *   java Sender <rcv_ip> <rcv_data_port> <sender_ack_port> <input_file> <timeout_ms> [window_size]
  */
 public class Sender {
 
     private static final int TIMEOUT_MS = 500; // retransmission timeout
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 3) {
-            System.err.println("usage: java Sender <host> <port> <file>");
+        if (args.length < 5 || args.length > 6) {
+            System.err.println("usage: java Sender <rcv_ip> <rcv_data_port> <sender_ack_port> <input_file> <timeout_ms> [window_size]");
             System.exit(1);
         }
 
-        String host = args[0];
-        int port = Integer.parseInt(args[1]);
-        File file = new File(args[2]);
+        String rcvIp = args[0];
+        int rcvDataPort = Integer.parseInt(args[1]);
+        int senderAckPort = Integer.parseInt(args[2]);
+        File file = new File(args[3]);
+        int timeout = Integer.parseInt(args[4]);
+        int windowSize = 1; // default size
+        if (args.length == 6) {
+            windowSize = Integer.parseInt(args[5]);
+        }
         if (!file.exists() || !file.isFile()) {
             System.err.println("invalid file: " + file);
             System.exit(1);
         }
 
-        InetAddress addr = InetAddress.getByName(host);
-        DatagramSocket socket = new DatagramSocket();
-        socket.setSoTimeout(TIMEOUT_MS);
+        InetAddress addr = InetAddress.getByName(rcvIp);
+        // bind socket to our ack port so we can receive replies there
+        DatagramSocket socket = new DatagramSocket(senderAckPort);
+        socket.setSoTimeout(timeout);
 
         // handshake: send SOT (seq 0) until we get ACK0
         DSPacket sot = new DSPacket(DSPacket.TYPE_SOT, 0, null);
         byte[] buf = sot.toBytes();
-        DatagramPacket pkt = new DatagramPacket(buf, buf.length, addr, port);
+        DatagramPacket pkt = new DatagramPacket(buf, buf.length, addr, rcvDataPort);
 
         while (true) {
             socket.send(pkt);
@@ -66,7 +71,7 @@ public class Sender {
                 byte[] data = new byte[bytesRead];
                 System.arraycopy(payload, 0, data, 0, bytesRead);
                 DSPacket dataPkt = new DSPacket(DSPacket.TYPE_DATA, seq, data);
-                DatagramPacket out = new DatagramPacket(dataPkt.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, port);
+                DatagramPacket out = new DatagramPacket(dataPkt.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
 
                 // stop and wait for ack for this seq
                 while (true) {
@@ -87,7 +92,7 @@ public class Sender {
 
             // send EOT with seq = next sequence number
             DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, seq, null);
-            DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, port);
+            DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
             while (true) {
                 socket.send(pout);
                 try {
