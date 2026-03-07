@@ -68,7 +68,7 @@ public class Sender {
         }
 
         try (FileInputStream fis = new FileInputStream(file)) {
-            if (windowSize == 1) {
+            if (windowSize <= 1) {
                 // Stop-and-Wait
                 byte[] payload = new byte[DSPacket.MAX_PAYLOAD_SIZE];
                 int bytesRead;
@@ -79,7 +79,7 @@ public class Sender {
                     System.arraycopy(payload, 0, data, 0, bytesRead);
                     DSPacket dataPkt = new DSPacket(DSPacket.TYPE_DATA, seq, data);
                     DatagramPacket out = new DatagramPacket(dataPkt.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
-
+                    
                     int consecutiveTimeouts = 0;
                     while (true) {
                         socket.send(out);
@@ -104,6 +104,7 @@ public class Sender {
                 int eotSeq = seq;
                 DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
                 DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
+                int consecutiveTimeouts = 0;
                 while (true) {
                     socket.send(pout);
                     try {
@@ -113,15 +114,19 @@ public class Sender {
                             break;
                         }
                     } catch (SocketTimeoutException e) {
+                        consecutiveTimeouts++;
                         System.out.println("timeout waiting for EOT ACK, retransmitting");
+                        if (consecutiveTimeouts >= 3) {
+                            System.err.println("Unable to transfer file.");
+                            System.exit(1);
+                        }
                     }
                 }
             } else {
                 // Go-Back-N: chunk index 0..n-1, seq = (index+1)%128 (so 1,2,..,127,0)
                 List<byte[]> chunks = readFileToChunks(file);
                 int n = chunks.size();
-                int eotSeq = (n % 128) + 1;
-                if (eotSeq == 129) eotSeq = 1;
+                int eotSeq = (n + 1) % 128;
 
                 int baseSeq = 1;
                 int nextChunkIndex = 0;
@@ -145,8 +150,8 @@ public class Sender {
                         if (ack.getType() == DSPacket.TYPE_ACK) {
                             int s = ack.getSeqNum();
                             int newBase = (s + 1) % 128;
-                            if (newBase == 0) newBase = 1;
                             if (ackAdvancesWindow(s, baseSeq, nextChunkIndex)) {
+                                System.out.println("received ACK for seq " + newBase);
                                 baseSeq = newBase;
                                 consecutiveTimeouts = 0;
                             }

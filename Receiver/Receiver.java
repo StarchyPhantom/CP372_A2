@@ -59,6 +59,7 @@ public class Receiver {
                     case DSPacket.TYPE_DATA:
                         int seq = pkt.getSeqNum();
                         int cumulativeAck;
+                        
                         if (delivered[seq]) {
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
@@ -72,7 +73,20 @@ public class Receiver {
                                 System.out.println("writing data seq=" + expectedSeq);
                                 delivered[expectedSeq] = true;
                                 dataBuffer[expectedSeq] = null;
+                                int prev = expectedSeq;
                                 expectedSeq = (expectedSeq + 1) % 128;
+                                // If we wrapped around (went from 127 -> 0), clear bookkeeping
+                                // for the previous epoch to avoid stale 'delivered' flags
+                                if (expectedSeq == 0) {
+                                    for (int i = 0; i < 128; i++) {
+                                        if (i != expectedSeq) {
+                                            delivered[i] = false;
+                                            dataBuffer[i] = null;
+                                        }
+                                    }
+                                    // keep current expectedSeq slot untouched
+                                    delivered[expectedSeq] = false;
+                                }
                             }
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
