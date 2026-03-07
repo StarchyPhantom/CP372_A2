@@ -73,19 +73,12 @@ public class Receiver {
                                 System.out.println("writing data seq=" + expectedSeq);
                                 delivered[expectedSeq] = true;
                                 dataBuffer[expectedSeq] = null;
-                                int prev = expectedSeq;
                                 expectedSeq = (expectedSeq + 1) % 128;
-                                // If we wrapped around (went from 127 -> 0), clear bookkeeping
-                                // for the previous epoch to avoid stale 'delivered' flags
+                                // On wrap (127 -> 0), clear delivered[] so the next cycle's
+                                // seq 0..127 are not mistaken for duplicates. Do not clear
+                                // dataBuffer so we keep any buffered packets for the new cycle.
                                 if (expectedSeq == 0) {
-                                    for (int i = 0; i < 128; i++) {
-                                        if (i != expectedSeq) {
-                                            delivered[i] = false;
-                                            dataBuffer[i] = null;
-                                        }
-                                    }
-                                    // keep current expectedSeq slot untouched
-                                    delivered[expectedSeq] = false;
+                                    for (int i = 0; i < 128; i++) delivered[i] = false;
                                 }
                             }
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;

@@ -126,39 +126,35 @@ public class Sender {
                 // Go-Back-N: chunk index 0..n-1, seq = (index+1)%128 (so 1,2,..,127,0)
                 List<byte[]> chunks = readFileToChunks(file);
                 int n = chunks.size();
-                int eotSeq = (n + 1) % 128;
+                int eotSeq = (n % 128 == 0) ? 1 : (n % 128 + 1);
 
-                int baseSeq = 1;
+                int baseChunkIndex = 0;  // oldest unacked chunk index
                 int nextChunkIndex = 0;
                 int consecutiveTimeouts = 0;
-                DSPacket[] sentPackets = new DSPacket[128];
 
-                while (baseSeq != eotSeq) {
-                    while (nextChunkIndex < n && numUnackedSeq(baseSeq, nextChunkIndex) < windowSize) {
-                        int seq = (nextChunkIndex + 1) % 128;
-                        byte[] chunk = chunks.get(nextChunkIndex);
-                        DSPacket dataPkt = new DSPacket(DSPacket.TYPE_DATA, seq, chunk);
-                        sentPackets[seq] = dataPkt;
+                while (baseChunkIndex < n) {
+                    while (nextChunkIndex < n && (nextChunkIndex - baseChunkIndex) < windowSize) {
                         nextChunkIndex++;
                     }
-                    if (numUnackedSeq(baseSeq, nextChunkIndex) > 0) {
-                        sendWindow(socket, addr, rcvDataPort, baseSeq, nextChunkIndex, sentPackets);
+                    if (nextChunkIndex > baseChunkIndex) {
+                        sendWindowFromChunks(socket, addr, rcvDataPort, baseChunkIndex, nextChunkIndex, chunks);
                     }
 
                     try {
                         DSPacket ack = receivePacket(socket);
                         if (ack.getType() == DSPacket.TYPE_ACK) {
                             int s = ack.getSeqNum();
-                            int newBase = (s + 1) % 128;
-                            if (ackAdvancesWindow(s, baseSeq, nextChunkIndex)) {
-                                System.out.println("received ACK for seq " + newBase);
-                                baseSeq = newBase;
+                            int ackedChunk = (s == 0) ? 127 : (s - 1);
+                            int newBase = ackedChunk + 1;
+                            if (newBase > baseChunkIndex && ackedChunk < nextChunkIndex) {
+                                System.out.println("received ACK for seq " + s);
+                                baseChunkIndex = newBase;
                                 consecutiveTimeouts = 0;
                             }
                         }
                     } catch (SocketTimeoutException e) {
                         consecutiveTimeouts++;
-                        System.out.println("timeout, retransmitting window from base " + baseSeq);
+                        System.out.println("timeout, retransmitting window from base " + baseChunkIndex);
                         if (consecutiveTimeouts >= 3) {
                             System.err.println("Unable to transfer file.");
                             System.exit(1);
@@ -207,42 +203,18 @@ public class Sender {
         return chunks;
     }
 
-    /** Last sent seq for nextChunkIndex chunks (chunk 0..nextChunkIndex-1 -> seq 1,2,..,127,0). */
-    private static int lastSentSeq(int nextChunkIndex) {
-        if (nextChunkIndex == 0) return -1;
-        return (nextChunkIndex % 128 == 0) ? 0 : (nextChunkIndex % 128);
-    }
-
-    /** Number of packets in flight: from baseSeq to last sent (by nextChunkIndex). */
-    private static int numUnackedSeq(int baseSeq, int nextChunkIndex) {
-        if (nextChunkIndex == 0) return 0;
-        int last = lastSentSeq(nextChunkIndex);
-        return (last - baseSeq + 128) % 128 + 1;
-    }
-
-    /** Whether ACK for seq s advances the window (s is in [baseSeq, lastSent] circular). */
-    private static boolean ackAdvancesWindow(int s, int baseSeq, int nextChunkIndex) {
-        if (nextChunkIndex == 0) return false;
-        int last = lastSentSeq(nextChunkIndex);
-        int dist = (s - baseSeq + 128) % 128;
-        int windowLen = (last - baseSeq + 128) % 128 + 1;
-        return dist < windowLen;
-    }
-
-    /** Send all packets from baseSeq to last chunk (nextChunkIndex-1) in permuted-by-4 order. */
-    private static void sendWindow(DatagramSocket socket, InetAddress addr, int rcvDataPort,
-                                   int baseSeq, int nextChunkIndex, DSPacket[] sentPackets) throws IOException {
-        int count = numUnackedSeq(baseSeq, nextChunkIndex);
+    /** Build and send window [baseChunkIndex, nextChunkIndex) from chunks, permuted in groups of 4. */
+    private static void sendWindowFromChunks(DatagramSocket socket, InetAddress addr, int rcvDataPort,
+                                            int baseChunkIndex, int nextChunkIndex, List<byte[]> chunks) throws IOException {
         List<DSPacket> inOrder = new ArrayList<>();
-        int seq = baseSeq;
-        for (int i = 0; i < count; i++) {
-            inOrder.add(sentPackets[seq]);
-            seq = (seq + 1) % 128;
+        for (int i = baseChunkIndex; i < nextChunkIndex; i++) {
+            int seq = (i + 1) % 128;
+            inOrder.add(new DSPacket(DSPacket.TYPE_DATA, seq, chunks.get(i)));
         }
         List<DSPacket> toSend = new ArrayList<>();
         for (int i = 0; i < inOrder.size(); i += 4) {
             if (i + 4 <= inOrder.size()) {
-                toSend.addAll(ChaosEngine.permutePackets(inOrder.subList(i, i + 4)));
+                toSend.addAll(ChaosEngine.permutePackets(new ArrayList<>(inOrder.subList(i, i + 4))));
             } else {
                 toSend.addAll(inOrder.subList(i, inOrder.size()));
             }
