@@ -38,8 +38,8 @@ public class Sender {
             System.err.println("invalid file: " + file);
             System.exit(1);
         }
-        if (args.length == 6 && (windowSize % 4 != 0 || windowSize > 128)) {
-            System.err.println("window_size must be a multiple of 4 and <= 128");
+        if (args.length == 6 && (windowSize % 4 != 0 || windowSize < 4 || windowSize > 128)) {
+            System.err.println("window_size must be a multiple of 4 and has to be >= 4 and <= 128");
             System.exit(1);
         }
 
