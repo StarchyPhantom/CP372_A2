@@ -104,7 +104,6 @@ public class Sender {
                 int eotSeq = seq;
                 DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
                 DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
-                int consecutiveTimeouts = 0;
                 while (true) {
                     socket.send(pout);
                     try {
@@ -114,12 +113,7 @@ public class Sender {
                             break;
                         }
                     } catch (SocketTimeoutException e) {
-                        consecutiveTimeouts++;
                         System.out.println("timeout waiting for EOT ACK, retransmitting");
-                        if (consecutiveTimeouts >= 3) {
-                            System.err.println("Unable to transfer file.");
-                            System.exit(1);
-                        }
                     }
                 }
             } else {
@@ -183,7 +177,6 @@ public class Sender {
 
                 DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
                 DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
-                consecutiveTimeouts = 0;
                 while (true) {
                     socket.send(pout);
                     try {
@@ -194,11 +187,6 @@ public class Sender {
                         }
                     } catch (SocketTimeoutException e) {
                         System.out.println("timeout waiting for EOT ACK, retransmitting");
-                        consecutiveTimeouts++;
-                        if (consecutiveTimeouts >= 3) {
-                            System.err.println("EOT ACK not received, transfer may be incomplete.");
-                            System.exit(1);
-                        }
                     }
                 }
             }

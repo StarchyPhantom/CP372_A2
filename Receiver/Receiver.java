@@ -88,8 +88,30 @@ public class Receiver {
                     case DSPacket.TYPE_EOT:
                         if (pkt.getSeqNum() == expectedSeq) {
                             System.out.println("received EOT seq=" + pkt.getSeqNum());
-                            maybeSendAck(socket, pkt.getSeqNum(), host, port, ackCountRef, rn);
-                            socket.close(); // done
+                            int eotSeq = pkt.getSeqNum();
+                            maybeSendAck(socket, eotSeq, host, port, ackCountRef, rn);
+                            // Stay open for retransmits in case EOT ACK was dropped by ChaosEngine.
+                            // Re-ACK any repeated EOT; exit when no more arrive within 3 timeouts.
+                            socket.setSoTimeout(2000);
+                            int eotRetries = 0;
+                            byte[] eotBuf = new byte[DSPacket.MAX_PACKET_SIZE];
+                            while (eotRetries < 3) {
+                                DatagramPacket eotPkt = new DatagramPacket(eotBuf, eotBuf.length);
+                                try {
+                                    socket.receive(eotPkt);
+                                    DSPacket rePkt = new DSPacket(eotPkt.getData());
+                                    if (rePkt.getType() == DSPacket.TYPE_EOT && rePkt.getSeqNum() == eotSeq) {
+                                        System.out.println("re-received EOT, re-sending ACK");
+                                        maybeSendAck(socket, eotSeq,
+                                                eotPkt.getAddress().getHostAddress(),
+                                                eotPkt.getPort(), ackCountRef, rn);
+                                        eotRetries = 0; // reset; sender clearly still waiting
+                                    }
+                                } catch (java.net.SocketTimeoutException ste) {
+                                    eotRetries++;
+                                }
+                            }
+                            socket.close();
                             return;
                         } else {
                             int lastInOrder = (expectedSeq - 1 + 128) % 128;
