@@ -39,6 +39,10 @@ public class Receiver {
         // GBN/SaW: buffer for out-of-order DATA; cumulative ACK = last contiguous delivered
         byte[][] dataBuffer = new byte[128][];
         boolean[] delivered = new boolean[128];
+        // Track logical epoch (wrap count) for each sequence slot to disambiguate cycles.
+        int currentEpoch = 0;
+        int[] slotEpoch = new int[128];
+        for (int i = 0; i < 128; i++) slotEpoch[i] = Integer.MIN_VALUE;
 
         try (FileOutputStream fos = new FileOutputStream(outFile)) {
             byte[] buf = new byte[BUFFER_SIZE];
@@ -60,49 +64,51 @@ public class Receiver {
                         int seq = pkt.getSeqNum();
                         int cumulativeAck;
 
-                        // Determine whether this seq is "upcoming" (new cycle) or "past" (duplicate).
-                        // A seq within 64 steps ahead of expectedSeq is upcoming; 64+ steps behind is past.
-                        // This prevents seq 0 of cycle N+1 (arriving before the cycle-N wrap clears
-                        // delivered[]) from being misidentified as a duplicate of cycle N's seq 0.
+                        // Determine whether this seq belongs to the current epoch or the previous one.
                         int distFromExpected = (seq - expectedSeq + 128) % 128;
                         boolean isUpcoming = (distFromExpected < 64);
+                        int pktEpoch = isUpcoming ? currentEpoch : currentEpoch - 1;
 
-                        if (!isUpcoming && delivered[seq]) {
-                            // True duplicate from the current delivery context: already written to file
+                        // If slot already belongs to pktEpoch and is delivered, it's a duplicate
+                        if (slotEpoch[seq] == pktEpoch && delivered[seq]) {
                             System.out.println("duplicate seq=" + seq + " (already delivered), re-ACK " + ((expectedSeq - 1 + 128) % 128));
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
-                        } else if (!isUpcoming && dataBuffer[seq] != null) {
-                            // Already buffered out-of-order from current window; try delivery defensively
+                        }
+                        // If slot already buffered for same epoch, it's a duplicate buffered packet
+                        else if (slotEpoch[seq] == pktEpoch && dataBuffer[seq] != null) {
                             System.out.println("duplicate out-of-order seq=" + seq + " (already buffered, waiting for seq=" + expectedSeq + ")");
-                            while (dataBuffer[expectedSeq] != null) {
+                            // Try to flush any contiguous buffered packets for current epoch
+                            while (slotEpoch[expectedSeq] == currentEpoch && dataBuffer[expectedSeq] != null) {
                                 fos.write(dataBuffer[expectedSeq]);
                                 System.out.println("writing data seq=" + expectedSeq);
                                 delivered[expectedSeq] = true;
+                                slotEpoch[expectedSeq] = currentEpoch;
                                 dataBuffer[expectedSeq] = null;
                                 expectedSeq = (expectedSeq + 1) % 128;
                                 if (expectedSeq == 0) {
-                                    for (int i = 0; i < 128; i++) delivered[i] = false;
+                                    currentEpoch++; // we've advanced into a new epoch
                                 }
                             }
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
                         } else {
-                            // New packet, or a cross-cycle packet whose seq was delivered in a prior cycle
+                            // New packet for pktEpoch
                             if (seq != expectedSeq) {
-                                System.out.println("buffering out-of-order seq=" + seq + " (expected seq=" + expectedSeq + ")");
+                                System.out.println("buffering out-of-order seq=" + seq + " (expected seq=" + expectedSeq + ") epoch=" + pktEpoch);
                             }
                             dataBuffer[seq] = Arrays.copyOf(pkt.getPayload(), pkt.getLength());
-                            while (dataBuffer[expectedSeq] != null) {
+                            slotEpoch[seq] = pktEpoch;
+
+                            // Flush any in-order buffered packets belonging to the current epoch
+                            while (slotEpoch[expectedSeq] == currentEpoch && dataBuffer[expectedSeq] != null) {
                                 fos.write(dataBuffer[expectedSeq]);
                                 System.out.println("writing data seq=" + expectedSeq);
                                 delivered[expectedSeq] = true;
                                 dataBuffer[expectedSeq] = null;
                                 expectedSeq = (expectedSeq + 1) % 128;
-                                // On wrap (127 -> 0), clear delivered[] so the next cycle's
-                                // seqs are not misidentified as duplicates of the current cycle.
                                 if (expectedSeq == 0) {
-                                    for (int i = 0; i < 128; i++) delivered[i] = false;
+                                    currentEpoch++;
                                 }
                             }
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
