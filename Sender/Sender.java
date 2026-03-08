@@ -134,26 +134,22 @@ public class Sender {
                 boolean retransmitted = false;
 
                 while (baseChunkIndex < n) {
-                    // Send only NEW packets that now fit in the window
+                    // Fill the window with new packets only after the previous window is fully ACKed
                     int prevNext = nextChunkIndex;
                     while (nextChunkIndex < n && (nextChunkIndex - baseChunkIndex) < windowSize) {
                         nextChunkIndex++;
                     }
                     if (nextChunkIndex > prevNext) {
                         int firstNewSeq = (prevNext + 1) % 128;
-                        int lastNewSeq  = (nextChunkIndex) % 128;
+                        int lastNewSeq  = nextChunkIndex % 128;
                         System.out.println("sending packets seq " + firstNewSeq + " to " + lastNewSeq
                                 + " (chunks " + prevNext + "-" + (nextChunkIndex - 1) + ")");
                         sendChunkRange(socket, addr, rcvDataPort, prevNext, nextChunkIndex, chunks);
                     }
 
-                    // Drain ACKs for up to timeout ms; stop as soon as window advances
-                    long ackDeadline = System.currentTimeMillis() + timeout;
-                    boolean advanced = false;
-                    while (System.currentTimeMillis() < ackDeadline && !advanced) {
-                        int remaining = (int) (ackDeadline - System.currentTimeMillis());
-                        if (remaining <= 0) break;
-                        socket.setSoTimeout(Math.max(1, remaining));
+                    // Wait until every packet in the current window is acknowledged.
+                    // On each timeout with no progress, retransmit the entire window from base.
+                    while (baseChunkIndex < nextChunkIndex) {
                         try {
                             DSPacket ack = receivePacket(socket);
                             if (ack.getType() == DSPacket.TYPE_ACK) {
@@ -171,28 +167,22 @@ public class Sender {
                                     }
                                     baseChunkIndex = newBase;
                                     consecutiveTimeouts = 0;
-                                    advanced = true;
                                 }
                             }
                         } catch (SocketTimeoutException e) {
-                            break;
+                            consecutiveTimeouts++;
+                            int baseSeq = (baseChunkIndex + 1) % 128;
+                            int lastSeq  = nextChunkIndex % 128;
+                            System.out.println("timeout (attempt " + consecutiveTimeouts + "/3) — "
+                                    + "retransmitting window: seq " + baseSeq + " to " + lastSeq
+                                    + " (chunks " + baseChunkIndex + "-" + (nextChunkIndex - 1) + ")");
+                            if (consecutiveTimeouts >= 3) {
+                                System.err.println("Unable to transfer file.");
+                                System.exit(1);
+                            }
+                            sendWindowFromChunks(socket, addr, rcvDataPort, baseChunkIndex, nextChunkIndex, chunks);
+                            retransmitted = true;
                         }
-                    }
-                    socket.setSoTimeout(timeout);
-                    if (!advanced) {
-                        consecutiveTimeouts++;
-                        int baseSeq = (baseChunkIndex + 1) % 128;
-                        int lastSeq  = nextChunkIndex % 128;
-                        System.out.println("timeout (attempt " + consecutiveTimeouts + "/3) — "
-                                + "retransmitting window: seq " + baseSeq + " to " + lastSeq
-                                + " (chunks " + baseChunkIndex + "-" + (nextChunkIndex - 1) + ")");
-                        if (consecutiveTimeouts >= 3) {
-                            System.err.println("Unable to transfer file.");
-                            System.exit(1);
-                        }
-                        // Retransmit the entire current window from base
-                        sendWindowFromChunks(socket, addr, rcvDataPort, baseChunkIndex, nextChunkIndex, chunks);
-                        retransmitted = true;
                     }
                 }
 
