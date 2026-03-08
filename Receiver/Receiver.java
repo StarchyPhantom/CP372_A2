@@ -59,14 +59,39 @@ public class Receiver {
                     case DSPacket.TYPE_DATA:
                         int seq = pkt.getSeqNum();
                         int cumulativeAck;
-                        
-                        if (delivered[seq]) {
+
+                        // Determine whether this seq is "upcoming" (new cycle) or "past" (duplicate).
+                        // A seq within 64 steps ahead of expectedSeq is upcoming; 64+ steps behind is past.
+                        // This prevents seq 0 of cycle N+1 (arriving before the cycle-N wrap clears
+                        // delivered[]) from being misidentified as a duplicate of cycle N's seq 0.
+                        int distFromExpected = (seq - expectedSeq + 128) % 128;
+                        boolean isUpcoming = (distFromExpected < 64);
+
+                        if (!isUpcoming && delivered[seq]) {
+                            // True duplicate from the current delivery context: already written to file
+                            System.out.println("duplicate seq=" + seq + " (already delivered), re-ACK " + ((expectedSeq - 1 + 128) % 128));
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
-                        } else if (dataBuffer[seq] != null) {
+                        } else if (!isUpcoming && dataBuffer[seq] != null) {
+                            // Already buffered out-of-order from current window; try delivery defensively
+                            System.out.println("duplicate out-of-order seq=" + seq + " (already buffered, waiting for seq=" + expectedSeq + ")");
+                            while (dataBuffer[expectedSeq] != null) {
+                                fos.write(dataBuffer[expectedSeq]);
+                                System.out.println("writing data seq=" + expectedSeq);
+                                delivered[expectedSeq] = true;
+                                dataBuffer[expectedSeq] = null;
+                                expectedSeq = (expectedSeq + 1) % 128;
+                                if (expectedSeq == 0) {
+                                    for (int i = 0; i < 128; i++) delivered[i] = false;
+                                }
+                            }
                             cumulativeAck = (expectedSeq - 1 + 128) % 128;
                             maybeSendAck(socket, cumulativeAck, host, port, ackCountRef, rn);
                         } else {
+                            // New packet, or a cross-cycle packet whose seq was delivered in a prior cycle
+                            if (seq != expectedSeq) {
+                                System.out.println("buffering out-of-order seq=" + seq + " (expected seq=" + expectedSeq + ")");
+                            }
                             dataBuffer[seq] = Arrays.copyOf(pkt.getPayload(), pkt.getLength());
                             while (dataBuffer[expectedSeq] != null) {
                                 fos.write(dataBuffer[expectedSeq]);
@@ -75,8 +100,7 @@ public class Receiver {
                                 dataBuffer[expectedSeq] = null;
                                 expectedSeq = (expectedSeq + 1) % 128;
                                 // On wrap (127 -> 0), clear delivered[] so the next cycle's
-                                // seq 0..127 are not mistaken for duplicates. Do not clear
-                                // dataBuffer so we keep any buffered packets for the new cycle.
+                                // seqs are not misidentified as duplicates of the current cycle.
                                 if (expectedSeq == 0) {
                                     for (int i = 0; i < 128; i++) delivered[i] = false;
                                 }

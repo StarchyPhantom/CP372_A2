@@ -82,8 +82,8 @@ public class Sender {
                     
                     int consecutiveTimeouts = 0;
                     boolean retransmitted = false;
+                    socket.send(out);  // initial send
                     while (true) {
-                        socket.send(out);
                         try {
                             DSPacket ack = receivePacket(socket);
                             if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == seq) {
@@ -95,6 +95,9 @@ public class Sender {
                                 seq = (seq + 1) % 128;
                                 break;
                             }
+                            // Wrong/stale ACK: ignore and keep waiting — do NOT resend,
+                            // as an extra send would increment the receiver's ackCount and
+                            // shift the ChaosEngine drop pattern for subsequent ACKs.
                         } catch (SocketTimeoutException e) {
                             consecutiveTimeouts++;
                             System.out.println("timeout waiting for ACK " + seq + ", retransmitting (attempt " + consecutiveTimeouts + "/3)");
@@ -103,6 +106,7 @@ public class Sender {
                                 System.exit(1);
                             }
                             retransmitted = true;
+                            socket.send(out);  // retransmit only on timeout
                         }
                     }
                 }
@@ -110,8 +114,8 @@ public class Sender {
                 int eotSeq = seq;
                 DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
                 DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
+                socket.send(pout);
                 while (true) {
-                    socket.send(pout);
                     try {
                         DSPacket ack = receivePacket(socket);
                         if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == eotSeq) {
@@ -120,6 +124,7 @@ public class Sender {
                         }
                     } catch (SocketTimeoutException e) {
                         System.out.println("timeout waiting for EOT ACK, retransmitting");
+                        socket.send(pout);
                     }
                 }
             } else {
