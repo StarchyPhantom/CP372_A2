@@ -110,6 +110,9 @@ public class Receiver {
         if (!ChaosEngine.shouldDrop(ackCountRef[0], rn)) {
             sendAck(socket, seq, host, port);
         }
+        else {
+            System.out.println("simulating loss of ACK for seq=" + seq);
+        }
     }
 
     private static void sendAck(DatagramSocket socket, int seq, String host, int port) throws IOException {

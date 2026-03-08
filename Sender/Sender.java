@@ -183,6 +183,7 @@ public class Sender {
 
                 DSPacket eot = new DSPacket(DSPacket.TYPE_EOT, eotSeq, null);
                 DatagramPacket pout = new DatagramPacket(eot.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
+                consecutiveTimeouts = 0;
                 while (true) {
                     socket.send(pout);
                     try {
@@ -193,6 +194,11 @@ public class Sender {
                         }
                     } catch (SocketTimeoutException e) {
                         System.out.println("timeout waiting for EOT ACK, retransmitting");
+                        consecutiveTimeouts++;
+                        if (consecutiveTimeouts >= 3) {
+                            System.err.println("EOT ACK not received, transfer may be incomplete.");
+                            System.exit(1);
+                        }
                     }
                 }
             }
