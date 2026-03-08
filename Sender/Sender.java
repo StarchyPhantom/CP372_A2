@@ -81,22 +81,28 @@ public class Sender {
                     DatagramPacket out = new DatagramPacket(dataPkt.toBytes(), DSPacket.MAX_PACKET_SIZE, addr, rcvDataPort);
                     
                     int consecutiveTimeouts = 0;
+                    boolean retransmitted = false;
                     while (true) {
                         socket.send(out);
                         try {
                             DSPacket ack = receivePacket(socket);
                             if (ack.getType() == DSPacket.TYPE_ACK && ack.getSeqNum() == seq) {
-                                System.out.println("received ACK for seq " + seq);
+                                if (retransmitted) {
+                                    System.out.println("retransmit recovered: received ACK for seq " + seq);
+                                } else {
+                                    System.out.println("received ACK for seq " + seq);
+                                }
                                 seq = (seq + 1) % 128;
                                 break;
                             }
                         } catch (SocketTimeoutException e) {
                             consecutiveTimeouts++;
-                            System.out.println("timeout waiting for ACK " + seq + ", retransmitting");
+                            System.out.println("timeout waiting for ACK " + seq + ", retransmitting (attempt " + consecutiveTimeouts + "/3)");
                             if (consecutiveTimeouts >= 3) {
                                 System.err.println("Unable to transfer file.");
                                 System.exit(1);
                             }
+                            retransmitted = true;
                         }
                     }
                 }
@@ -125,6 +131,7 @@ public class Sender {
                 int baseChunkIndex = 0;  // oldest unacked chunk index
                 int nextChunkIndex = 0;  // next chunk to send for the first time
                 int consecutiveTimeouts = 0;
+                boolean retransmitted = false;
 
                 while (baseChunkIndex < n) {
                     // Send only NEW packets that now fit in the window
@@ -133,6 +140,10 @@ public class Sender {
                         nextChunkIndex++;
                     }
                     if (nextChunkIndex > prevNext) {
+                        int firstNewSeq = (prevNext + 1) % 128;
+                        int lastNewSeq  = (nextChunkIndex) % 128;
+                        System.out.println("sending packets seq " + firstNewSeq + " to " + lastNewSeq
+                                + " (chunks " + prevNext + "-" + (nextChunkIndex - 1) + ")");
                         sendChunkRange(socket, addr, rcvDataPort, prevNext, nextChunkIndex, chunks);
                     }
 
@@ -152,7 +163,12 @@ public class Sender {
                                 int ackedChunk = baseChunkIndex + offset;
                                 int newBase = ackedChunk + 1;
                                 if (newBase > baseChunkIndex && ackedChunk < nextChunkIndex) {
-                                    System.out.println("received ACK for seq " + s);
+                                    if (retransmitted) {
+                                        System.out.println("retransmit recovered: received ACK for seq " + s);
+                                        retransmitted = false;
+                                    } else {
+                                        System.out.println("received ACK for seq " + s);
+                                    }
                                     baseChunkIndex = newBase;
                                     consecutiveTimeouts = 0;
                                     advanced = true;
@@ -165,13 +181,18 @@ public class Sender {
                     socket.setSoTimeout(timeout);
                     if (!advanced) {
                         consecutiveTimeouts++;
-                        System.out.println("timeout, retransmitting window from base " + baseChunkIndex);
+                        int baseSeq = (baseChunkIndex + 1) % 128;
+                        int lastSeq  = nextChunkIndex % 128;
+                        System.out.println("timeout (attempt " + consecutiveTimeouts + "/3) — "
+                                + "retransmitting window: seq " + baseSeq + " to " + lastSeq
+                                + " (chunks " + baseChunkIndex + "-" + (nextChunkIndex - 1) + ")");
                         if (consecutiveTimeouts >= 3) {
                             System.err.println("Unable to transfer file.");
                             System.exit(1);
                         }
                         // Retransmit the entire current window from base
                         sendWindowFromChunks(socket, addr, rcvDataPort, baseChunkIndex, nextChunkIndex, chunks);
+                        retransmitted = true;
                     }
                 }
 
